@@ -1,9 +1,10 @@
 import numpy as np
 from copy import deepcopy
+from sklearn.exceptions import NotFittedError
+
 class ImprovedMinMaxKMeans:
-    def __init__(self, n_clusters=8, p_max=0.5, p_step=0.01, beta=0.1, variance_threshold=10**-6, max_iter=500, verbose=0, n_init=10):
+    def __init__(self, n_clusters=8, p_max=0.5, p_step=0.01, beta=0.1, variance_threshold=10**-6, max_iter=500, verbose=0):
         self.n_clusters = n_clusters
-        self.n_init = n_init
         self.p_max = p_max
         self.p_step = p_step
         self.beta = beta
@@ -14,16 +15,18 @@ class ImprovedMinMaxKMeans:
         self.cost_ = 0
         self.clusters_variance_ = None
         self.cluster_centers_ = None
+        self.p_ = 0
+        self.weights_ = None
+        self.n_iter_ = 0
 
     def fit(self, X):
-        #TODO: Create the main code in a function
         #Validate the parameters (TODO: To Complete)
         self.validate_parameters()
         #Initialize cluster centroids
         self.cluster_centers_ = self.initialize_centroids(X)
 
         #Initialize cluster weights
-        current_weights = [1/self.n_clusters] * self.n_clusters
+        self.weights_ = [1/self.n_clusters] * self.n_clusters
         old_weights = [1 / self.n_clusters] * self.n_clusters
         #Initialize cluster assignments
         current_cluster_assignments = [[] for _ in range(self.n_clusters)]
@@ -32,47 +35,65 @@ class ImprovedMinMaxKMeans:
         t = 0
         p_init = 0
         empty_cluster = False
-        p = p_init
+        self.p_ = p_init
         converged = False
         while t < self.max_iter and not converged:
             t = t + 1
-            current_cluster_assignments = self.update_cluster_assignments(X, current_weights, p)
+            current_cluster_assignments = self.update_cluster_assignments(X)
             #Check for empty cluster and update its value
             if self.exists_singleton_cluster(current_cluster_assignments):
                 empty_cluster = True
-                p = p - self.p_step
-                if p < p_init:
+                self.p_ = self.p_ - self.p_step
+                if self.p_ < p_init:
                     return None
                 #Revert to the assignments and weights corresponding to the reduced p
                 current_cluster_assignments = deepcopy(old_cluster_assignments)
-                current_weights = old_weights.copy()
+                self.weights_ = old_weights.copy()
 
             #Update cluster centers
             self.update_cluster_centers(current_cluster_assignments, X)
 
-            if p < self.p_max and not empty_cluster:
+            if self.p_ < self.p_max and not empty_cluster:
                 #Store the current assignments in delta(p)
                 old_cluster_assignments = deepcopy(current_cluster_assignments)
                 #Store the previous weights in vector W(p)
-                old_weights = np.copy(current_weights)
-                p = p + self.p_step
+                old_weights = np.copy(self.weights_)
+                self.p_ = self.p_ + self.p_step
 
             #Update the weights
-            self.update_weights(current_weights, current_cluster_assignments, X, p)
+            self.update_weights(current_cluster_assignments, X)
             #Check for convergence
-            cost = self.compute_cost(current_weights)
+            cost = self.compute_cost()
             converged = np.abs(cost - self.cost_) < self.variance_threshold
-            # print("Iteration", t)
-            # print("Diff variancce", np.abs(cost - self.cost_))
+            if self.verbose:
+                print("Iteration ", t, "/", self.max_iter)
+                print("Variance difference:", np.abs(cost - self.cost_))
             self.cost_ = cost
 
+        self.n_iter_ = t
         self.labels_ = self.get_instances_labels(current_cluster_assignments, X)
+        return self
 
 
-    def compute_cost(self, weights):
+    def predict(self, X):
+        msg = ("This %(name)s instance is not fitted yet. Call 'fit' with "
+               "appropriate arguments before using this estimator.")
+        if self.cluster_centers_ is None:
+            raise NotFittedError(msg % {'name': type(self).__name__})
+
+        cluster_assignments = self.update_cluster_assignments(X)
+        labels = self.get_instances_labels(cluster_assignments, X)
+        return labels
+
+    def fit_predict(self, X):
+        self.fit(X)
+        return self.labels_
+
+
+    def compute_cost(self):
         cost = 0
         for k in range(self.n_clusters):
-            cost = cost + weights[k]*self.clusters_variance_[k]
+            cost = cost + self.weights_[k]*self.clusters_variance_[k]
         return cost
 
     def get_instances_labels(self, cluster_assignments, X):
@@ -90,12 +111,12 @@ class ImprovedMinMaxKMeans:
             count = len(mask)
             self.cluster_centers_[i] = multiplication/count if count > 0 else 0
 
-    def update_weights(self, weights, cluster_assignments, X, p):
+    def update_weights(self, cluster_assignments, X):
         self.clusters_variance_ = self.compute_clusters_variance(cluster_assignments, X)
-        total_variance = np.sum(np.power(self.clusters_variance_, 1/(1-p)))
+        total_variance = np.sum(np.power(self.clusters_variance_, 1/(1-self.p_)))
         for k in range(self.n_clusters):
             variance = self.clusters_variance_[k]
-            weights[k] = self.beta * weights[k] + (1 - self.beta)*np.power(variance, 1/(1-p))/total_variance
+            self.weights_[k] = self.beta * self.weights_[k] + (1 - self.beta)*np.power(variance, 1/(1-self.p_))/total_variance
 
 
     def compute_clusters_variance(self, cluster_assignments,X):
@@ -115,39 +136,30 @@ class ImprovedMinMaxKMeans:
                 return True
         return False
 
-    def update_cluster_assignments(self, X, weights, p):
+    def update_cluster_assignments(self, X):
         # Update the cluster assignments
         new_clusters = [[] for _ in range(self.n_clusters)]
         N = X.shape[0]
         for i in range(N):
-            cluster_index = self.compute_minimization_step(weights, X[i, :], p)
+            cluster_index = self.compute_minimization_step(X[i, :])
             new_clusters[cluster_index].append(i)
         return new_clusters
 
 
-    def compute_minimization_step(self, weights, instance, p):
+    def compute_minimization_step(self, instance):
         distances = []
         for i in range(self.n_clusters):
-            distance = np.power(weights[i], p) * np.power(np.linalg.norm(instance - self.cluster_centers_[i]), 2)
+            distance = np.power(self.weights_[i], self.p_) * np.power(np.linalg.norm(instance - self.cluster_centers_[i]), 2)
             distances.append(distance)
         return np.argmin(distances)
 
 
     def validate_parameters(self):
-        if self.n_init <= 0:
-            raise ValueError("Invalid number of initializations."
-                             " n_init=%d must be bigger than zero." % self.n_init)
         if self.max_iter <= 0:
             raise ValueError(
                 'Number of iterations should be a positive number,'
                 ' got %d instead' % self.max_iter
             )
-
-    def predict(self, X):
-        return self.labels_
-
-    def fit_predict(self, X):
-        return self.fit(X).labels_
 
 
     def initialize_centroids(self, X):

@@ -1,4 +1,6 @@
 import numpy as np
+from sklearn.exceptions import NotFittedError
+
 
 class MinMaxKMeans:
     def __init__(self, n_clusters=8, p_max=0.5, p_step=0.01, beta=0.1, variance_threshold=10**-6, max_iter=500, verbose=0, n_init=10):
@@ -14,6 +16,9 @@ class MinMaxKMeans:
         self.cost_ = 0
         self.clusters_variance_ = None
         self.cluster_centers_ = None
+        self.n_iter_ = 0
+        self.p = 0
+        self.weights = None
 
     def fit(self, X):
         #Validate the parameters (TODO: To Complete)
@@ -22,7 +27,7 @@ class MinMaxKMeans:
         self.cluster_centers_ = self.initialize_centroids(X)
 
         #Initialize cluster weights
-        current_weights = [1/self.n_clusters] * self.n_clusters
+        self.weights = [1/self.n_clusters] * self.n_clusters
         old_weights = [1 / self.n_clusters] * self.n_clusters
         #Initialize cluster assignments
         current_cluster_assignments = np.zeros((X.shape[0], self.n_clusters))
@@ -31,50 +36,49 @@ class MinMaxKMeans:
         t = 0
         p_init = 0
         empty_cluster = False
-        p = p_init
+        self.p = p_init
         converged = False
-        while t < self.max_iter and not converged:  #current_variance - previous_variance >= self.variance_stop
+        while t < self.max_iter and not converged:
             t = t + 1
-            self.update_cluster_assignments(X, current_cluster_assignments, current_weights, p)
+            self.update_cluster_assignments(X, current_cluster_assignments, self.weights, self.p)
             #Check for empty cluster and update its value
             if self.exists_singleton_cluster(current_cluster_assignments):
                 empty_cluster = True
-                p = p - self.p_step
-                if p < p_init:
+                self.p = self.p - self.p_step
+                if self.p < p_init:
                     return None
                 #Revert to the assignments and weights corresponding to the reduced p
-                self.revert_assignments(current_cluster_assignments, current_weights, old_cluster_assignments, old_weights)
+                self.revert_assignments(current_cluster_assignments, self.weights, old_cluster_assignments, old_weights)
 
             #Update cluster centers
             self.update_cluster_centers(current_cluster_assignments, X)
 
-            if p < self.p_max and not empty_cluster:
+            if self.p < self.p_max and not empty_cluster:
                 #Store the current assignments in delta(p)
                 old_cluster_assignments = np.copy(current_cluster_assignments)
                 #Store the previous weights in vector W(p)
-                old_weights = np.copy(current_weights)
-                p = p + self.p_step
+                old_weights = np.copy(self.weights)
+                self.p = self.p + self.p_step
 
             #Update the weights
-            self.update_weights(current_weights, current_cluster_assignments, X, p)
+            self.update_weights(self.weights, current_cluster_assignments, X, self.p)
             #Check for convergence
-            cost = self.compute_cost(current_weights)
-
-            # print("Old cost", self.cost_)
-            # print("New cost", cost)
-            # print("Difference", np.abs(cost - self.cost_))
-            # if np.abs(cost - self.cost_) < self.variance_threshold:
-            #     converged = True
+            cost = self.compute_cost(self.weights)
             converged = np.abs(cost - self.cost_) < self.variance_threshold
+            if self.verbose:
+                print("Iteration ", t, "/", self.max_iter)
+                print("Variance difference:", np.abs(cost - self.cost_))
             self.cost_ = cost
-        self.labels_ = self.get_instances_labels(current_cluster_assignments)
 
+        self.n_iter_ = t
+        self.labels_ = self.get_instances_labels(current_cluster_assignments)
+        return self
 
     def compute_cost(self, weights):
         cost = 0
         for k in range(self.n_clusters):
             cost = cost + weights[k]*self.clusters_variance_[k]
-        return  cost
+        return cost
 
     def get_instances_labels(self, cluster_assignments):
         labels = np.zeros(cluster_assignments.shape[0])
@@ -84,13 +88,12 @@ class MinMaxKMeans:
         return labels
 
 
-
     def update_cluster_centers(self, current_cluster_assignments, X):
         #Update cluster centers
         for i in range(self.n_clusters):
             mask = (current_cluster_assignments[:,i] > 0)
-            multiplication = np.sum(X[mask,:], axis=0)
-            count = np.sum(current_cluster_assignments[:,i], axis=0)
+            multiplication = np.sum(X[mask, :], axis=0)
+            count = np.sum(current_cluster_assignments[:, i], axis=0)
             self.cluster_centers_[i] = multiplication/count
 
     def update_weights(self, weights, cluster_assignments, X, p):
@@ -102,7 +105,6 @@ class MinMaxKMeans:
 
 
     def compute_clusters_variance(self, cluster_assignments,X):
-        #Initialize variance
         variance = np.zeros(self.n_clusters)
         for k in range(self.n_clusters):
             mask = (cluster_assignments[:, k] > 0)
@@ -154,11 +156,19 @@ class MinMaxKMeans:
             )
 
     def predict(self, X):
-        return self.labels_
+        msg = ("This %(name)s instance is not fitted yet. Call 'fit' with "
+               "appropriate arguments before using this estimator.")
+        if self.cluster_centers_ is None:
+            raise NotFittedError(msg % {'name': type(self).__name__})
+
+        cluster_assignments = np.zeros((X.shape[0], self.n_clusters))
+        self.update_cluster_assignments(X, cluster_assignments, self.weights, self.p)
+        labels = self.get_instances_labels(cluster_assignments)
+        return labels
 
     def fit_predict(self, X):
-        return self.fit(X).labels_
-
+        self.fit(X)
+        return self.labels_
 
     def initialize_centroids(self, X):
         """
