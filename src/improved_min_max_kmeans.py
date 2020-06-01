@@ -3,7 +3,7 @@ from copy import deepcopy
 from sklearn.exceptions import NotFittedError
 
 class ImprovedMinMaxKMeans:
-    def __init__(self, n_clusters=8, p_max=0.5, p_step=0.01, beta=0.1, variance_threshold=10**-6, max_iter=500, verbose=0):
+    def __init__(self, n_clusters=3, p_max=0.5, p_step=0.01, beta=0.1, variance_threshold=10**-6, max_iter=500, verbose=0):
         self.n_clusters = n_clusters
         self.p_max = p_max
         self.p_step = p_step
@@ -12,7 +12,7 @@ class ImprovedMinMaxKMeans:
         self.max_iter = max_iter
         self.verbose = verbose
         self.labels_ = None
-        self.cost_ = 0
+        self.cost_ = 0.0001
         self.clusters_variance_ = None
         self.cluster_centers_ = None
         self.p_ = 0
@@ -20,31 +20,38 @@ class ImprovedMinMaxKMeans:
         self.n_iter_ = 0
 
     def fit(self, X):
-        #Validate the parameters (TODO: To Complete)
+        #Validate the parameters
         self.validate_parameters()
         #Initialize cluster centroids
         self.cluster_centers_ = self.initialize_centroids(X)
 
         #Initialize cluster weights
-        self.weights_ = [1/self.n_clusters] * self.n_clusters
-        old_weights = [1 / self.n_clusters] * self.n_clusters
+        self.weights_ = np.asarray([1/self.n_clusters] * self.n_clusters)
+        old_weights = np.asarray([1 / self.n_clusters] * self.n_clusters)
         #Initialize cluster assignments
-        current_cluster_assignments = [[] for _ in range(self.n_clusters)]
-        old_cluster_assignments = [[] for _ in range(self.n_clusters)]
-
+        current_cluster_assignments = np.asarray([[] for _ in range(self.n_clusters)])
+        old_cluster_assignments = np.asarray([[] for _ in range(self.n_clusters)])
         t = 0
         p_init = 0
         empty_cluster = False
         self.p_ = p_init
         converged = False
+        variance_difference = 0
+        times_equal = 0
+
         while t < self.max_iter and not converged:
             t = t + 1
             current_cluster_assignments = self.update_cluster_assignments(X)
             #Check for empty cluster and update its value
             if self.exists_singleton_cluster(current_cluster_assignments):
                 empty_cluster = True
+                if self.verbose:
+                    print("Empty cluster found")
                 self.p_ = self.p_ - self.p_step
                 if self.p_ < p_init:
+                    if self.verbose:
+                        print("p cannot be decreased further")
+                        print("Aborting Execution")
                     return None
                 #Revert to the assignments and weights corresponding to the reduced p
                 current_cluster_assignments = deepcopy(old_cluster_assignments)
@@ -64,12 +71,22 @@ class ImprovedMinMaxKMeans:
             self.update_weights(current_cluster_assignments, X)
             #Check for convergence
             cost = self.compute_cost()
-            converged = np.abs(cost - self.cost_) < self.variance_threshold
+            converged = np.abs(1 - cost/self.cost_) < self.variance_threshold
+
+            #Extra stop criteria implemented
+            if np.abs(variance_difference - np.abs(cost-self.cost_)) < self.variance_threshold:
+                times_equal = times_equal + 1
+                if times_equal > 3:
+                    converged = True
+            else:
+                times_equal = 0
+
             if self.verbose:
                 print("Iteration ", t, "/", self.max_iter)
-                print("Variance difference:", np.abs(cost - self.cost_))
+                print("Variance difference:", np.abs(cost-self.cost_))
             self.cost_ = cost
-
+        if self.verbose:
+            print("Converging for p=", self.p_, "after ", t, " iterations.")
         self.n_iter_ = t
         self.labels_ = self.get_instances_labels(current_cluster_assignments, X)
         return self
@@ -163,11 +180,6 @@ class ImprovedMinMaxKMeans:
 
 
     def initialize_centroids(self, X):
-        """
-        Selects the initial centroids (randomly)
-        :param X: The data where the points will be selected
-        :param n_clusters: Number of initial points to select (cluster centers)
-        """
         centroids_indexs = np.random.choice(range(len(X)), self.n_clusters, replace=False)
         return X[centroids_indexs]
 

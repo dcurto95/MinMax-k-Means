@@ -1,6 +1,5 @@
 from sklearn.metrics import silhouette_score, calinski_harabasz_score,davies_bouldin_score
 from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score, adjusted_mutual_info_score
-from scipy.spatial import distance
 import numpy as np
 
 
@@ -14,9 +13,9 @@ def compute_metrics(labels_true, labels_pred, X):
     #External indices
     nmi = normalized_mutual_info_score(labels_true, labels_pred)
     rand_score = adjusted_rand_score(labels_true, labels_pred)
-    ami = adjusted_mutual_info_score(labels_true, labels_pred)
+    # ami = adjusted_mutual_info_score(labels_true, labels_pred)
 
-    metrics = [silhouette, calinski, dbi, nmi, rand_score, ami]
+    metrics = [silhouette, calinski, dbi, nmi, rand_score]
     return metrics
 
 
